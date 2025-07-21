@@ -17,14 +17,26 @@ def delete_paper(paper_id):
     paper = validate_model(Paper, paper_id)
     db.session.delete(paper)
     db.session.commit()
-
     return Response(status=204, mimetype="application/json")
 
 @bp.patch("/<paper_id>")
-def update_paper_message(paper_id):
+def update_paper_fields(paper_id):
     paper = validate_model(Paper, paper_id)
     data = request.get_json()
-    paper.message = data["message"]
+
+    if "title" in data:
+        paper.title = data["title"]
+    if "abstract" in data:
+        paper.abstract = data["abstract"]
+    if "authors" in data:
+        paper.authors = data["authors"]
+    if "publicationDate" in data:
+        paper.publicationDate = data["publicationDate"]
+    if "source" in data:
+        paper.source = data["source"]
+    if "URL" in data:
+        paper.URL = data["URL"]
+
     db.session.commit()
     return {"paper": paper.to_dict()}, 200
 

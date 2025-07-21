@@ -11,13 +11,15 @@ class Collection(db.Model):
     collection_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     title: Mapped[str]
     owner: Mapped[str]
+    description: Mapped[str]
     papers: Mapped[list["Paper"]] = relationship(back_populates="collection")
 
     def to_dict(self):
         collection_as_dict = {
             "collection_id": self.collection_id,
             "title": self.title,
-            "owner": self.owner 
+            "owner": self.owner,
+            "description": self.description 
         }
         return collection_as_dict
     
@@ -25,6 +27,7 @@ class Collection(db.Model):
     def from_dict(cls, collection_data):
         new_collection = Collection(
             title = collection_data["title"],
-            owner = collection_data["owner"]
+            owner = collection_data["owner"],
+            description = collection_data["description"],
         )
         return new_collection

@@ -17,26 +17,29 @@ def create_paper_on_collection(collection_id):
     collection = validate_model(Collection, collection_id)
     request_body = request.get_json()
 
-    # Add the collection_id to the request data so Paper.from_dict can use it
+    # Only require title, source, and URL
+    required_fields = ["title", "source", "URL"]
+    for field in required_fields:
+        if field not in request_body or request_body[field] == "":
+            abort(400, description=f"Missing required field: {field}")
+
     request_body["collection_id"] = collection.collection_id
 
-    # Use your reusable create_model function here
     response, status_code = create_model(Paper, request_body)
-
     return make_response(response, status_code)
+
 
 
 @bp.get("")
 def get_all_collections():
-    query = db.select(Collection)
-    query = query.order_by(Collection.collection_id)  
-
+    query = db.select(Collection).order_by(Collection.collection_id)
     collections = db.session.scalars(query)
 
     collections_response = []
     for collection in collections:
         collection_dict = collection.to_dict()
         collection_dict["papers_count"] = len(collection.papers)
+        collection_dict["description"] = collection.description  # Optional if already in to_dict()
         collections_response.append(collection_dict)
 
     return collections_response
@@ -57,6 +60,7 @@ def get_all_papers_on_collection(collection_id):
         "collection_id": collection.collection_id,
         "title": collection.title,
         "owner": collection.owner,
+        "description": collection.description,  # <-- add this
         "papers": collection_papers
     }
 
