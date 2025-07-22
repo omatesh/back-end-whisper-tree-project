@@ -1,4 +1,5 @@
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from typing import Optional
 from ..db import db
 
 # avoids import errors for Paper
@@ -10,7 +11,7 @@ class Collection(db.Model):
 
     collection_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     title: Mapped[str]
-    owner: Mapped[str]
+    owner: Mapped[Optional[str]] = mapped_column(nullable=True)
     description: Mapped[str]
     papers: Mapped[list["Paper"]] = relationship(back_populates="collection")
 
