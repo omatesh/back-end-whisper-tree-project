@@ -23,6 +23,20 @@ class Collection(db.Model):
             "description": self.description 
         }
         return collection_as_dict
+    # def to_dict(self, include_papers=False):
+    #     collection_as_dict = {
+    #         "collection_id": self.collection_id,
+    #         "title": self.title,
+    #         "owner": self.owner,
+    #         "description": self.description 
+    #     }
+        
+    #     if include_papers:
+    #         collection_as_dict["papers"] = [paper.to_dict() for paper in self.papers]
+    #     else:
+    #         collection_as_dict["papers_count"] = len(self.papers)
+        
+    #     return collection_as_dict
     
     @classmethod
     def from_dict(cls, collection_data):
