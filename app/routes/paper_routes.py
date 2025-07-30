@@ -38,10 +38,22 @@ def like_paper(paper_id):
 @bp.delete("/<int:paper_id>")
 def delete_paper(paper_id):
     """Delete a paper"""
+    print(f"🗑️ [BACKEND] Delete request for paper ID: {paper_id}")
+    print(f"🗑️ [BACKEND] Paper ID type: {type(paper_id)}")
+
     paper = Paper.query.get(paper_id)
     if not paper:
+        print(f"❌ [BACKEND] Paper with ID {paper_id} not found in database")
+        
+        # Debug: Show what papers DO exist
+        all_papers = Paper.query.all()
+        print(f"🔍 [BACKEND] Available papers in database:")
+        for p in all_papers:
+            print(f"  ID: {p.paper_id}, Title: {p.title}")
+
         abort(404, description=f"Paper with ID {paper_id} not found.")
     
+    print(f"✅ [BACKEND] Found paper: {paper.title}")
     try:
         db.session.delete(paper)
         db.session.commit()
@@ -55,7 +67,7 @@ def delete_paper(paper_id):
         print(f"Error deleting paper: {e}")
         abort(500, description="Failed to delete paper.")
 
-        
+
 # from flask import Blueprint, abort, make_response, request, Response
 # from app.models.paper import Paper
 # from ..db import db
