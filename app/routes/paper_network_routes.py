@@ -9,7 +9,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score
-# from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer
 import requests
 import json
 from datetime import datetime
@@ -24,12 +24,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Initialize the sentence transformer model for embeddings (fallback)
-# model = SentenceTransformer('all-MiniLM-L6-v2')
+model = SentenceTransformer('all-MiniLM-L6-v2')
 
-# Configure Gemini API
+# Gemini API
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 if not GEMINI_API_KEY:
-    print("⚠️  Warning: GEMINI_API_KEY not found in .env file")
+    print("Warning: GEMINI_API_KEY not found in .env file")
 
 # Simple embedding cache
 embedding_cache = {}
@@ -38,14 +38,22 @@ embedding_cache = {}
 bp = Blueprint("bp_network", __name__, url_prefix="/network")
 
 
+
 @bp.route('/visualize', methods=['POST'])
-def visualize_embeddings():
+def map_networks():
     """
     Get papers with titles and abstracts, generate embeddings, reduce to 2D with PCA, return coordinates
     Request: {"papers": [{"title": "...", "abstract": "..."}, ...]}
     """
     try:
+        # =========================================================================
+        # 1. Takes a collection of research papers (titles + abstracts)
+        #
+        # =========================================================================
+
+        #parses incoming HTTP request body from JSON format into Python dictionary
         data = request.get_json()
+        #safely retrieves 'papers' array with empty list fallback to prevent KeyError exceptions
         papers = data.get('papers', [])
         
         if not papers:
@@ -57,7 +65,45 @@ def visualize_embeddings():
         # Extract abstracts for embedding
         abstracts = [paper.get('abstract', '') for paper in papers]
         
+        #Opt2
+        # abstracts = []
+        # for paper in papers:
+        #     abstract = paper.get('abstract', '')
+        #     abstracts.append(abstract)
+
+        # =========================================================================
+        # 2. EMBEDDING GENERATION
+        # Technology: Google Gemini Embedding API (primary), with in-memory caching system
+        ''' This is a smart caching and backup system that converts research paper text into 
+        mathematical numbers (embeddings) that computers can understand and compare.
+        Lazy evaluation with multi-tier fallback and 
+        result memoization for embedding vector generation.
+
+       Gemini Embedding Generation. Metod used: embed_content() 
+       https://ai.google.dev/gemini-api/docs/embeddings
+        embed_content(): Generates embeddings for input text
+        - Returns: Dense vector representations of semantic meaning
+        - Use case: Similarity comparison, clustering, search
+        - Output: Numerical vectors capturing text semantics
+
+        Gemini's Process:
+
+        Text Analysis: Reads and understands the input text using advanced neural networks
+        Semantic Encoding: Captures meaning, context, relationships, and concepts
+        Vector Generation: Converts understanding into exactly 768 numbers
+        Optimization: Ensures similar meanings produce similar number patterns
+
+        Gemini response:
+
+        One list per abstract sent
+        Each list has exactly 768 numbers
+        Numbers range roughly -1 to +1
+        Numbers capture the meaning of that abstract
+        '''
+        # =========================================================================
+
         # Check cache first
+        #Check if embeddings were previously computed to avoid expensive recalculation
         cached_embeddings = []
         cache_hits = 0
         for abstract in abstracts:
@@ -71,53 +117,75 @@ def visualize_embeddings():
         if cache_hits == len(abstracts):
             embeddings = cached_embeddings
             method_used = "cached"
-            print(f"✅ Using cached embeddings for all {len(abstracts)} abstracts")
+            print(f"Using cached embeddings for all {len(abstracts)} abstracts")
         else:
             # Generate embeddings normally
             embeddings = []
             method_used = "local"
         
             if GEMINI_API_KEY:
+                #API Setup and Retry Configuration
                 try:
                     method_used = "gemini"
                     print(f"Using Gemini for {len(abstracts)} abstracts")
+                    #Initializes API client with authentication credentials
                     client = genai.Client()
                     
                     # Process all abstracts in batch for efficiency
                     retry_delay = 2
                     max_retries = 3
                     
+                    # Retry logic:
                     for attempt in range(max_retries):
                         try:
+                            #Gemini embedding API Call for text vectorization
                             result = client.models.embed_content(
-                                model="gemini-embedding-001",
-                                contents=abstracts,
+                                model="gemini-embedding-001", #tells Gemini which AI model to use
+                                contents=abstracts,#list of abstracts to convert
                                 config=types.EmbedContentConfig(
                                     task_type="SEMANTIC_SIMILARITY",
+                                    # Alternative for clustering/grouping
+                                    # task_type="CLUSTERING"
+                                    
+                                    # For search/retrieval systems
+                                    # task_type="RETRIEVAL_QUERY"
+                                    # task_type="RETRIEVAL_DOCUMENT"
                                     output_dimensionality=768
                                 )
                             )
                             
-                            # Extract embeddings from result (ContentEmbedding objects)
+                            # Gemini returns wrapped objects, PCA needs the raw numbers for clustering
+                            # Extract embeddings from result
                             embeddings = [embedding.values for embedding in result.embeddings]
-                            print(f"✅ Successfully embedded {len(embeddings)} abstracts")
+
+                            #Opt 2
+                            # embeddings = []
+                            # for embedding in result.embeddings:
+                            #     embedding_values = embedding.values
+                            #     embeddings.append(embedding_values)
+                            print(f"Successfully embedded {len(embeddings)} abstracts")
                             break
                             
+                        #catches any error that happens during the Gemini API call 
+                        # and implements smart retry logic    
                         except Exception as e:
                             if attempt < max_retries - 1:
-                                print(f"⏳ Retry in {retry_delay}s...")
-                                time.sleep(retry_delay)
+                                print(f"Retry in {retry_delay}s...")
+                                time.sleep(retry_delay) #Pauses program for a number of seconds
                                 retry_delay *= 2
                             else:
-                                print(f"❌ Gemini failed after {max_retries} attempts: {e}")
+                                print(f"Gemini failed after {max_retries} attempts: {e}")
                                 embeddings = []
                                 raise e
-                                
+                #catches setup, connection, API key, configuration Errors:                
                 except Exception as e:
                     print(f"Gemini error: {e}")
                     method_used = "local"
             
-            # Use local if Gemini failed or not available
+            # Use local if Gemini failed or not available 
+            # The show must go on!
+            # Uses local AI model (SentenceTransformer) to convert research abstracts 
+            # into number lists, just like Gemini would do, but with lower quality
             if not embeddings:
                 print("Using local SentenceTransformer")
                 embeddings = model.encode(abstracts).tolist()
@@ -126,7 +194,7 @@ def visualize_embeddings():
             # Store new embeddings in cache
             for abstract, embedding in zip(abstracts, embeddings):
                 embedding_cache[abstract] = embedding
-            print(f"💾 Cached {len(embeddings)} new embeddings")
+            print(f"Cached {len(embeddings)} new embeddings")
         
         # Perform K-means clustering using silhouette analysis
         embeddings_array = np.array(embeddings)
@@ -264,7 +332,7 @@ def visualize_embeddings():
         }), 200
         
     except Exception as e:
-        print(f"Error in visualize_embeddings: {e}")
+        print(f"Error in map_networks: {e}")
         return jsonify({"error": str(e)}), 500
 
 @bp.route('/collection-analysis', methods=['POST'])
@@ -497,93 +565,93 @@ def test_network():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@bp.route('/related-papers', methods=['POST'])
-def fetch_related_papers():
-    """
-    Fetch related papers from existing database using similarity search
-    """
-    try:
-        data = request.get_json()
-        text = data.get('text', '')
-        input_type = data.get('input_type', 'abstract')
-        limit = data.get('limit', 50)
+# @bp.route('/related-papers', methods=['POST'])
+# def fetch_related_papers():
+#     """
+#     Fetch related papers from existing database using similarity search
+#     """
+#     try:
+#         data = request.get_json()
+#         text = data.get('text', '')
+#         input_type = data.get('input_type', 'abstract')
+#         limit = data.get('limit', 50)
 
-        # Search your existing database for similar papers
-        papers = search_existing_papers(text, limit)
+#         # Search your existing database for similar papers
+#         papers = search_existing_papers(text, limit)
         
-        return jsonify(papers), 200
+#         return jsonify(papers), 200
 
-    except Exception as e:
-        print(f"Error in fetch_related_papers: {e}")
-        return jsonify({"error": str(e)}), 500
+#     except Exception as e:
+#         print(f"Error in fetch_related_papers: {e}")
+#         return jsonify({"error": str(e)}), 500
 
-def search_existing_papers(query_text, limit=50):
-    """Search existing papers in your database using text similarity"""
-    try:
-        # Get all papers with abstracts from database
-        papers = Paper.query.filter(
-            Paper.abstract.isnot(None),
-            Paper.abstract != '',
-            db.func.length(Paper.abstract) > 50
-        ).limit(200).all()  # Get more papers to search through
+# def search_existing_papers(query_text, limit=50):
+#     """Search existing papers in your database using text similarity"""
+#     try:
+#         # Get all papers with abstracts from database
+#         papers = Paper.query.filter(
+#             Paper.abstract.isnot(None),
+#             Paper.abstract != '',
+#             db.func.length(Paper.abstract) > 50
+#         ).limit(200).all()  # Get more papers to search through
         
-        if not papers:
-            return []
+#         if not papers:
+#             return []
         
-        # Create text corpus for similarity comparison
-        paper_texts = []
-        paper_data = []
+#         # Create text corpus for similarity comparison
+#         paper_texts = []
+#         paper_data = []
         
-        for paper in papers:
-            # Combine title and abstract for better matching
-            paper_text = f"{paper.title} {paper.abstract}"
-            paper_texts.append(paper_text)
-            paper_data.append(paper)
+#         for paper in papers:
+#             # Combine title and abstract for better matching
+#             paper_text = f"{paper.title} {paper.abstract}"
+#             paper_texts.append(paper_text)
+#             paper_data.append(paper)
         
-        # Add query text to corpus
-        all_texts = [query_text] + paper_texts
+#         # Add query text to corpus
+#         all_texts = [query_text] + paper_texts
         
-        # Calculate TF-IDF similarities
-        vectorizer = TfidfVectorizer(
-            max_features=1000, 
-            stop_words='english', 
-            ngram_range=(1, 2)
-        )
-        tfidf_matrix = vectorizer.fit_transform(all_texts)
+#         # Calculate TF-IDF similarities
+#         vectorizer = TfidfVectorizer(
+#             max_features=1000, 
+#             stop_words='english', 
+#             ngram_range=(1, 2)
+#         )
+#         tfidf_matrix = vectorizer.fit_transform(all_texts)
         
-        # Calculate similarities between query and all papers
-        similarities = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:]).flatten()
+#         # Calculate similarities between query and all papers
+#         similarities = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:]).flatten()
         
-        # Sort papers by similarity and get top results
-        paper_similarities = list(zip(paper_data, similarities))
-        paper_similarities.sort(key=lambda x: x[1], reverse=True)
+#         # Sort papers by similarity and get top results
+#         paper_similarities = list(zip(paper_data, similarities))
+#         paper_similarities.sort(key=lambda x: x[1], reverse=True)
         
-        # Return top similar papers
-        related_papers = []
-        for paper, similarity in paper_similarities[:limit]:
-            if similarity > 0.05:  # Minimum similarity threshold
-                formatted_paper = {
-                    "paper_id": paper.paper_id,
-                    "title": paper.title,
-                    "abstract": paper.abstract,
-                    "authors": paper.authors,
-                    "publication_date": paper.publication_date.isoformat() if paper.publication_date else None,
-                    "source": paper.source,
-                    "URL": paper.url,
-                    "download_url": None,  # Add if you have this field
-                    "core_id": paper.core_id,
-                    "likes_count": paper.likes_count,
-                    "collection_id": paper.collection_id,
-                    "similarity_score": float(similarity)  # Include similarity for debugging
-                }
-                related_papers.append(formatted_paper)
+#         # Return top similar papers
+#         related_papers = []
+#         for paper, similarity in paper_similarities[:limit]:
+#             if similarity > 0.05:  # Minimum similarity threshold
+#                 formatted_paper = {
+#                     "paper_id": paper.paper_id,
+#                     "title": paper.title,
+#                     "abstract": paper.abstract,
+#                     "authors": paper.authors,
+#                     "publication_date": paper.publication_date.isoformat() if paper.publication_date else None,
+#                     "source": paper.source,
+#                     "URL": paper.url,
+#                     "download_url": None,  # Add if you have this field
+#                     "core_id": paper.core_id,
+#                     "likes_count": paper.likes_count,
+#                     "collection_id": paper.collection_id,
+#                     "similarity_score": float(similarity)  # Include similarity for debugging
+#                 }
+#                 related_papers.append(formatted_paper)
         
-        print(f"Found {len(related_papers)} related papers from database")
-        return related_papers
+#         print(f"Found {len(related_papers)} related papers from database")
+#         return related_papers
         
-    except Exception as e:
-        print(f"Error searching existing papers: {e}")
-        return []
+#     except Exception as e:
+#         print(f"Error searching existing papers: {e}")
+#         return []
 
 
 # @bp.route('/generate', methods=['POST'])
@@ -749,220 +817,220 @@ def search_existing_papers(query_text, limit=50):
 #             print(f"Error in generate_paper_network: {e}")
 #             return jsonify({"error": str(e)}), 500
 
-# Create a separate blueprint for AI routes to avoid URL conflicts
-ai_bp = Blueprint("bp_ai", __name__, url_prefix="/ai")
+# UNUSED AI Blueprint - commented out
+# ai_bp = Blueprint("bp_ai", __name__, url_prefix="/ai")
 
-@ai_bp.route('/summarize-paper', methods=['POST'])
-def generate_paper_summary():
-    """
-    Generate AI-powered summary for a paper
-    """
-    try:
-        data = request.get_json()
-        title = data.get('title', '')
-        abstract = data.get('abstract', '')
-        authors = data.get('authors', '')
+# @ai_bp.route('/summarize-paper', methods=['POST'])
+# def generate_paper_summary():
+#     """
+#     Generate AI-powered summary for a paper
+#     """
+#     try:
+#         data = request.get_json()
+#         title = data.get('title', '')
+#         abstract = data.get('abstract', '')
+#         authors = data.get('authors', '')
 
-        # Simple rule-based summary (replace with AI model)
-        if abstract:
-            # Take first sentence or first 100 characters
-            sentences = abstract.split('. ')
-            summary = sentences[0]
-            if len(summary) > 100:
-                summary = summary[:97] + "..."
-        else:
-            summary = f"Research by {authors.split(',')[0] if authors else 'Unknown'} on {title[:50]}..."
+#         # Simple rule-based summary (replace with AI model)
+#         if abstract:
+#             # Take first sentence or first 100 characters
+#             sentences = abstract.split('. ')
+#             summary = sentences[0]
+#             if len(summary) > 100:
+#                 summary = summary[:97] + "..."
+#         else:
+#             summary = f"Research by {authors.split(',')[0] if authors else 'Unknown'} on {title[:50]}..."
 
-        return jsonify({"summary": summary}), 200
+#         return jsonify({"summary": summary}), 200
 
-    except Exception as e:
-        print(f"Error in generate_paper_summary: {e}")
-        return jsonify({"error": str(e)}), 500
+#     except Exception as e:
+#         print(f"Error in generate_paper_summary: {e}")
+#         return jsonify({"error": str(e)}), 500
 
-@bp.route('/expand', methods=['POST'])
-def expand_network():
-    """
-    Expand network by finding more papers related to a specific node
-    """
-    try:
-        data = request.get_json()
-        node_id = data.get('node_id', '')
-        current_network = data.get('current_network', {})
-        limit = data.get('limit', 20)
+# @bp.route('/expand', methods=['POST'])
+# def expand_network():
+#     """
+#     Expand network by finding more papers related to a specific node
+#     """
+#     try:
+#         data = request.get_json()
+#         node_id = data.get('node_id', '')
+#         current_network = data.get('current_network', {})
+#         limit = data.get('limit', 20)
 
-        # Find the node to expand from
-        target_node = None
-        for node in current_network.get('nodes', []):
-            if node['id'] == node_id:
-                target_node = node
-                break
+#         # Find the node to expand from
+#         target_node = None
+#         for node in current_network.get('nodes', []):
+#             if node['id'] == node_id:
+#                 target_node = node
+#                 break
 
-        if not target_node:
-            return jsonify({"error": "Node not found"}), 404
+#         if not target_node:
+#             return jsonify({"error": "Node not found"}), 404
 
-        # Search for more papers related to this node in your database
-        search_text = target_node.get('title', '') + ' ' + target_node.get('abstract', '')
+#         # Search for more papers related to this node in your database
+#         search_text = target_node.get('title', '') + ' ' + target_node.get('abstract', '')
         
-        # Get existing paper IDs to avoid duplicates
-        existing_paper_ids = set()
-        for node in current_network.get('nodes', []):
-            if node.get('paper_id'):
-                existing_paper_ids.add(node['paper_id'])
+#         # Get existing paper IDs to avoid duplicates
+#         existing_paper_ids = set()
+#         for node in current_network.get('nodes', []):
+#             if node.get('paper_id'):
+#                 existing_paper_ids.add(node['paper_id'])
         
-        new_papers = search_existing_papers_excluding(search_text, existing_paper_ids, limit)
+#         new_papers = search_existing_papers_excluding(search_text, existing_paper_ids, limit)
 
-        # Filter out papers already in network
-        existing_titles = set()
-        for node in current_network.get('nodes', []):
-            if node.get('title'):
-                existing_titles.add(node['title'].lower())
+#         # Filter out papers already in network
+#         existing_titles = set()
+#         for node in current_network.get('nodes', []):
+#             if node.get('title'):
+#                 existing_titles.add(node['title'].lower())
 
-        filtered_papers = []
-        for paper in new_papers:
-            if paper.get('title', '').lower() not in existing_titles:
-                filtered_papers.append(paper)
+#         filtered_papers = []
+#         for paper in new_papers:
+#             if paper.get('title', '').lower() not in existing_titles:
+#                 filtered_papers.append(paper)
 
-        # Generate expanded network (similar to generate_paper_network)
-        # This is a simplified version - you may want to maintain the existing network structure
-        expanded_network = generate_expanded_network(current_network, filtered_papers, target_node)
+#         # Generate expanded network (similar to generate_paper_network)
+#         # This is a simplified version - you may want to maintain the existing network structure
+#         expanded_network = generate_expanded_network(current_network, filtered_papers, target_node)
 
-        return jsonify(expanded_network), 200
+#         return jsonify(expanded_network), 200
 
-    except Exception as e:
-        print(f"Error in expand_network: {e}")
-        return jsonify({"error": str(e)}), 500
+#     except Exception as e:
+#         print(f"Error in expand_network: {e}")
+#         return jsonify({"error": str(e)}), 500
     
-# Helper functions
+# UNUSED Helper functions - commented out
 
-def search_existing_papers_excluding(query_text, exclude_ids, limit=20):
-    """Search existing papers excluding specified IDs"""
-    try:
-        # Get papers excluding the specified IDs
-        papers = Paper.query.filter(
-            Paper.abstract.isnot(None),
-            Paper.abstract != '',
-            db.func.length(Paper.abstract) > 50,
-            ~Paper.paper_id.in_(exclude_ids) if exclude_ids else True
-        ).limit(100).all()
+# def search_existing_papers_excluding(query_text, exclude_ids, limit=20):
+#     """Search existing papers excluding specified IDs"""
+#     try:
+#         # Get papers excluding the specified IDs
+#         papers = Paper.query.filter(
+#             Paper.abstract.isnot(None),
+#             Paper.abstract != '',
+#             db.func.length(Paper.abstract) > 50,
+#             ~Paper.paper_id.in_(exclude_ids) if exclude_ids else True
+#         ).limit(100).all()
         
-        if not papers:
-            return []
+#         if not papers:
+#             return []
         
-        # Use same similarity approach as before
-        paper_texts = [f"{paper.title} {paper.abstract}" for paper in papers]
-        all_texts = [query_text] + paper_texts
+#         # Use same similarity approach as before
+#         paper_texts = [f"{paper.title} {paper.abstract}" for paper in papers]
+#         all_texts = [query_text] + paper_texts
         
-        vectorizer = TfidfVectorizer(max_features=1000, stop_words='english', ngram_range=(1, 2))
-        tfidf_matrix = vectorizer.fit_transform(all_texts)
-        similarities = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:]).flatten()
+#         vectorizer = TfidfVectorizer(max_features=1000, stop_words='english', ngram_range=(1, 2))
+#         tfidf_matrix = vectorizer.fit_transform(all_texts)
+#         similarities = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:]).flatten()
         
-        # Get top similar papers
-        paper_similarities = list(zip(papers, similarities))
-        paper_similarities.sort(key=lambda x: x[1], reverse=True)
+#         # Get top similar papers
+#         paper_similarities = list(zip(papers, similarities))
+#         paper_similarities.sort(key=lambda x: x[1], reverse=True)
         
-        related_papers = []
-        for paper, similarity in paper_similarities[:limit]:
-            if similarity > 0.1:  # Lower threshold for expansion
-                formatted_paper = {
-                    "paper_id": paper.paper_id,
-                    "title": paper.title,
-                    "abstract": paper.abstract,
-                    "authors": paper.authors,
-                    "publication_date": paper.publication_date.isoformat() if paper.publication_date else None,
-                    "source": paper.source,
-                    "URL": paper.url,
-                    "download_url": None,
-                    "core_id": paper.core_id,
-                    "likes_count": paper.likes_count,
-                    "collection_id": paper.collection_id
-                }
-                related_papers.append(formatted_paper)
+#         related_papers = []
+#         for paper, similarity in paper_similarities[:limit]:
+#             if similarity > 0.1:  # Lower threshold for expansion
+#                 formatted_paper = {
+#                     "paper_id": paper.paper_id,
+#                     "title": paper.title,
+#                     "abstract": paper.abstract,
+#                     "authors": paper.authors,
+#                     "publication_date": paper.publication_date.isoformat() if paper.publication_date else None,
+#                     "source": paper.source,
+#                     "URL": paper.url,
+#                     "download_url": None,
+#                     "core_id": paper.core_id,
+#                     "likes_count": paper.likes_count,
+#                     "collection_id": paper.collection_id
+#                 }
+#                 related_papers.append(formatted_paper)
         
-        return related_papers
+#         return related_papers
         
-    except Exception as e:
-        print(f"Error in search_existing_papers_excluding: {e}")
-        return []
+#     except Exception as e:
+#         print(f"Error in search_existing_papers_excluding: {e}")
+#         return []
 
-def search_arxiv(query, limit=25):
-    """Search arXiv API for papers"""
-    try:
-        import feedparser
-        import requests
+# def search_arxiv(query, limit=25):
+#     """Search arXiv API for papers"""
+#     try:
+#         import feedparser
+#         import requests
 
-        # Clean query for arXiv
-        clean_query = query.replace(' ', '+')
-        url = f"http://export.arxiv.org/api/query?search_query=all:{clean_query}&start=0&max_results={limit}"
+#         # Clean query for arXiv
+#         clean_query = query.replace(' ', '+')
+#         url = f"http://export.arxiv.org/api/query?search_query=all:{clean_query}&start=0&max_results={limit}"
 
-        response = requests.get(url)
-        feed = feedparser.parse(response.content)
+#         response = requests.get(url)
+#         feed = feedparser.parse(response.content)
 
-        papers = []
-        for entry in feed.entries:
-            paper = {
-                'id': entry.id.split('/')[-1],
-                'title': entry.title,
-                'abstract': entry.summary,
-                'authors': ', '.join([author.name for author in entry.authors]),
-                'date': entry.published,
-                'source': 'arXiv',
-                'url': entry.link,
-                'download_url': entry.link.replace('abs', 'pdf')
-            }
-            papers.append(paper)
+#         papers = []
+#         for entry in feed.entries:
+#             paper = {
+#                 'id': entry.id.split('/')[-1],
+#                 'title': entry.title,
+#                 'abstract': entry.summary,
+#                 'authors': ', '.join([author.name for author in entry.authors]),
+#                 'date': entry.published,
+#                 'source': 'arXiv',
+#                 'url': entry.link,
+#                 'download_url': entry.link.replace('abs', 'pdf')
+#             }
+#             papers.append(paper)
 
-        return papers
-    except Exception as e:
-        print(f"Error searching arXiv: {e}")
-        return []
+#         return papers
+#     except Exception as e:
+#         print(f"Error searching arXiv: {e}")
+#         return []
 
-def search_core_api(query, limit=25):
-    """Search CORE API for papers (requires API key)"""
-    try:
-        CORE_API_KEY = "YOUR_CORE_API_KEY"
+# def search_core_api(query, limit=25):
+#     """Search CORE API for papers (requires API key)"""
+#     try:
+#         CORE_API_KEY = "YOUR_CORE_API_KEY"
 
-        if not CORE_API_KEY or CORE_API_KEY == "YOUR_CORE_API_KEY":
-            return [] # Skip if no API key
+#         if not CORE_API_KEY or CORE_API_KEY == "YOUR_CORE_API_KEY":
+#             return [] # Skip if no API key
 
-        url = "https://api.core.ac.uk/v3/search/works"
-        headers = {"Authorization": f"Bearer {CORE_API_KEY}"}
-        params = {
-            "q": query,
-            "limit": limit
-        }
+#         url = "https://api.core.ac.uk/v3/search/works"
+#         headers = {"Authorization": f"Bearer {CORE_API_KEY}"}
+#         params = {
+#             "q": query,
+#             "limit": limit
+#         }
 
-        response = requests.get(url, headers=headers, params=params)
-        data = response.json()
+#         response = requests.get(url, headers=headers, params=params)
+#         data = response.json()
 
-        papers = []
-        for item in data.get('results', []):
-            paper = {
-                'id': item.get('id'),
-                'title': item.get('title', ''),
-                'abstract': item.get('abstract', ''),
-                'authors': ', '.join([author.get('name', '') for author in item.get('authors', [])]),
-                'date': item.get('publishedDate', ''),
-                'source': 'CORE',
-                'url': item.get('downloadUrl', ''),
-                'core_id': item.get('id')
-            }
-            papers.append(paper)
+#         papers = []
+#         for item in data.get('results', []):
+#             paper = {
+#                 'id': item.get('id'),
+#                 'title': item.get('title', ''),
+#                 'abstract': item.get('abstract', ''),
+#                 'authors': ', '.join([author.get('name', '') for author in item.get('authors', [])]),
+#                 'date': item.get('publishedDate', ''),
+#                 'source': 'CORE',
+#                 'url': item.get('downloadUrl', ''),
+#                 'core_id': item.get('id')
+#             }
+#             papers.append(paper)
 
-        return papers
-    except Exception as e:
-        print(f"Error searching CORE: {e}")
-        return []
+#         return papers
+#     except Exception as e:
+#         print(f"Error searching CORE: {e}")
+#         return []
 
-def generate_expanded_network(current_network, new_papers, anchor_node):
-    """Generate expanded network maintaining existing structure"""
-    # This is a simplified implementation
-    # You should merge new papers with existing network while maintaining positions
+# def generate_expanded_network(current_network, new_papers, anchor_node):
+#     """Generate expanded network maintaining existing structure"""
+#     # This is a simplified implementation
+#     # You should merge new papers with existing network while maintaining positions
 
-    # For now, return the current network with new papers added
-    # In a full implementation, you'd:
-    # 1. Calculate embeddings for new papers
-    # 2. Find optimal positions for new nodes
-    # 3. Create edges to existing nodes
-    # 4. Update clusters if necessary
+#     # For now, return the current network with new papers added
+#     # In a full implementation, you'd:
+#     # 1. Calculate embeddings for new papers
+#     # 2. Find optimal positions for new nodes
+#     # 3. Create edges to existing nodes
+#     # 4. Update clusters if necessary
 
-    return current_network
+#     return current_network
