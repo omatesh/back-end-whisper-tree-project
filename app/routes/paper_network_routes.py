@@ -196,8 +196,19 @@ def map_networks():
                 embedding_cache[abstract] = embedding
             print(f"Cached {len(embeddings)} new embeddings")
         
-        # Perform K-means clustering using silhouette analysis
-        embeddings_array = np.array(embeddings)
+        # =========================================================================
+        # 3. does clustering analysis and assigns each paper to a cluster
+        """K-means looks at all 768 dimensions simultaneously
+            Finds papers that are "close" across all 768 numbers
+            Groups them into topic clusters 
+            K-means doesn't change original 768D paper data at all. It just produces 
+            this list of cluster assignments as a result
+            """
+        # =========================================================================
+
+        # K-means is scikit-learn's clustering algorithm 
+        # np.array(embeddings)converts embeddings into the NumPy array, format that scikit-learn requires
+        embeddings_array = np.array(embeddings) # Type: NumPy array (matrix) w/768 numbers per paper
         
         # Find optimal number of clusters using silhouette score
         if len(papers) >= 4:  # Need at least 4 points for meaningful clustering
@@ -205,13 +216,14 @@ def map_networks():
             best_score = -1
             n_clusters = 2
             
-            for k in range(2, max_k + 1):
+            for k in range(2, max_k + 1): # Test different numbers of groups
                 try:
-                    kmeans_temp = KMeans(n_clusters=k, random_state=42, n_init=10)
-                    labels = kmeans_temp.fit_predict(embeddings_array)
-                    score = silhouette_score(embeddings_array, labels)
+                    kmeans_temp = KMeans(n_clusters=k, random_state=42, n_init=10) #setting up the sorter
+                    #Takes papers (the 768 numbers for each) and sorts them into k groups based on similarity
+                    labels = kmeans_temp.fit_predict(embeddings_array) 
+                    score = silhouette_score(embeddings_array, labels) #checks if these piles are different enough 
                     
-                    if score > best_score:
+                    if score > best_score: #comparing to saved best score
                         best_score = score
                         n_clusters = k
                         
@@ -220,20 +232,30 @@ def map_networks():
                     continue
             
             print(f"Silhouette analysis: optimal k={n_clusters} (score: {best_score:.3f})")
+        
+        # the fallback for datasets with less than 4 papers
         else:
             n_clusters = 2  # Default for small datasets
             print(f"Small dataset: using default k={n_clusters}")
         
-        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-        cluster_labels = kmeans.fit_predict(embeddings_array)
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10) #creates the clustering tool
+        cluster_labels = kmeans.fit_predict(embeddings_array) #runs the clustering and assigns each paper to a group
         
-        # PCA reduction to 2D
+    
+        # =========================================================================
+        # 4 PCA reduction to 2D for visualization
+        # Takes clustered by K-means papers (768D NumPy array)
+        # finds the "most important" 2 directions in 768D space
+        # converts each paper from 768 numbers → just 2 numbers (x,y)
+        # tries to keep papers that were close in 768D still close in 2D
+        # =========================================================================
+
         pca = PCA(n_components=2, random_state=42)
         coordinates_2d = pca.fit_transform(embeddings_array)
         
-        # Generate cluster names using TF-IDF
+        # Func generate cluster names using TF-IDF
         def generate_cluster_name_tfidf(cluster_id, paper_indices, all_titles):
-            # Get titles for this cluster
+            # Get titles for this cluster from the papers data (from HTTP response)
             cluster_titles = [papers[i].get('title', '') for i in paper_indices]
             
             if not cluster_titles or len(cluster_titles) == 0:
@@ -275,7 +297,8 @@ def map_networks():
                 print(f"TF-IDF naming error for cluster {cluster_id}: {e}")
                 return f"Cluster {cluster_id + 1}"
         
-        # Group papers by cluster
+        # reorganizes the cluster assignments from "paper-to-cluster" format ([0,1,2,0,1]) 
+        # into "cluster-to-papers" format ( {0: [papers 0,3], 1: [papers 1,4]}) 
         cluster_groups = {}
         for i, cluster_id in enumerate(cluster_labels):
             if cluster_id not in cluster_groups:
@@ -288,7 +311,9 @@ def map_networks():
         for cluster_id, paper_indices in cluster_groups.items():
             cluster_names[cluster_id] = generate_cluster_name_tfidf(cluster_id, paper_indices, all_titles)
         
-        # Prepare visualization data
+        # Prepare visualization data by
+        # combining each paper's 2D coordinates, cluster assignment, title, abstract, and cluster name 
+        # into a single dictionary
         points = []
         for i, abstract in enumerate(abstracts):
             paper = papers[i]
@@ -305,7 +330,7 @@ def map_networks():
                 "cluster_name": cluster_names[cluster_id]
             })
         
-        # Prepare cluster summary
+        # counts how many papers are in each cluster and assigning each cluster a color
         clusters = []
         for cluster_id, name in cluster_names.items():
             cluster_points = [p for p in points if p["cluster_id"] == cluster_id]
@@ -316,6 +341,8 @@ def map_networks():
                 "color": ["blue", "red", "green", "orange", "purple"][int(cluster_id) % 5]
             })
         
+        # returns a JSON response containing all the data: the individual paper points with coordinates, 
+        # cluster summaries with colors and names, total counts, and the map boundaries (min/max x,y values)
         return jsonify({
             "points": points,
             "count": len(points),
@@ -342,19 +369,21 @@ def collection_analysis():
     Request: {"user_abstract": "...", "user_title": "..."}
     """
     try:
+        #parses incoming HTTP request body from JSON format into Python dictionary
         data = request.get_json()
+        #safely retrieves 'abstract and title' strings with empty string or "User Input" fallback to prevent KeyError exceptions
         user_abstract = data.get('user_abstract', '')
         user_title = data.get('user_title', 'User Input')
         
         if not user_abstract:
             return jsonify({"error": "User abstract is required"}), 400
         
-        # Get all papers with collections from database
+        # Get all paper objects from database
         papers = Paper.query.filter(
-            Paper.abstract.isnot(None),
-            Paper.abstract != '',
-            db.func.length(Paper.abstract) > 50,
-            Paper.collection_id.isnot(None)
+            Paper.abstract.isnot(None),  # Must have an abstract (not None)
+            Paper.abstract != '',  # Abstract can't be empty string  
+            db.func.length(Paper.abstract) > 50, # Abstract must be at least 50 characters long
+            Paper.collection_id.isnot(None) # Must belong to a collection (not None)
         ).all()
         
         if len(papers) < 2:
@@ -420,7 +449,7 @@ def collection_analysis():
                             )
                             
                             embeddings = [embedding.values for embedding in result.embeddings]
-                            print(f"✅ Successfully embedded {len(embeddings)} abstracts")
+                            print(f" Successfully embedded {len(embeddings)} abstracts")
                             break
                             
                         except Exception as e:
@@ -429,7 +458,7 @@ def collection_analysis():
                                 time.sleep(retry_delay)
                                 retry_delay *= 2
                             else:
-                                print(f"❌ Gemini failed after {max_retries} attempts: {e}")
+                                print(f" Gemini failed after {max_retries} attempts: {e}")
                                 embeddings = []
                                 raise e
                                 
@@ -440,7 +469,7 @@ def collection_analysis():
             # Store new embeddings in cache
             for abstract, embedding in zip(abstracts, embeddings):
                 embedding_cache[abstract] = embedding
-            print(f"💾 Cached {len(embeddings)} new embeddings")
+            print(f" Cached {len(embeddings)} new embeddings")
         
         # PCA reduction to 2D
         embeddings_array = np.array(embeddings)

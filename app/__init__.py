@@ -8,6 +8,7 @@ from .models import collection, paper
 from .routes.paper_routes import bp as paper_bp
 from .routes.collection_routes import bp as collection_bp
 from .routes.core_api_routes import bp as core_bp
+from .routes.paper_network_routes import bp as network_bp#, ai_bp
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -32,6 +33,8 @@ def create_app(config=None):
     app.register_blueprint(collection_bp)
     app.register_blueprint(paper_bp)
     app.register_blueprint(core_bp)
+    app.register_blueprint(network_bp)
+    # app.register_blueprint(ai_bp)
 
     CORS(app)
     return app
