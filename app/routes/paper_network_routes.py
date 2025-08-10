@@ -573,6 +573,273 @@ def collection_analysis():
         print(f"Error in collection_analysis: {e}")
         return jsonify({"error": str(e)}), 500
 
+@bp.route('/analyze-idea', methods=['POST'])
+def analyze_idea():
+    """
+    Analyze user idea against papers in a specific collection using clustering and PCA
+    Request: {"collection_id": 1, "user_idea": "text describing research idea"}
+    """
+    try:
+        data = request.get_json()
+        collection_id = data.get('collection_id')
+        user_idea = data.get('user_idea', '')
+        
+        if not collection_id:
+            return jsonify({"error": "Collection ID is required"}), 400
+        if not user_idea:
+            return jsonify({"error": "User idea text is required"}), 400
+        
+        # Get papers from the specific collection
+        papers = Paper.query.filter(
+            Paper.collection_id == collection_id,
+            Paper.abstract.isnot(None),
+            Paper.abstract != '',
+            db.func.length(Paper.abstract) > 50
+        ).all()
+        
+        if len(papers) < 2:
+            return jsonify({"error": "Need at least 2 papers in collection for analysis"}), 400
+        
+        # Prepare all papers data including user input
+        all_papers_data = [{
+            "title": "User Input",
+            "abstract": user_idea,
+            "is_user_input": True
+        }]
+        
+        for paper in papers:
+            all_papers_data.append({
+                "title": paper.title,
+                "abstract": paper.abstract,
+                "is_user_input": False,
+                "paper_id": paper.paper_id
+            })
+        
+        # Extract abstracts for embedding
+        abstracts = [paper_data['abstract'] for paper_data in all_papers_data]
+        
+        # Generate embeddings (using same caching logic as existing endpoints)
+        cached_embeddings = []
+        cache_hits = 0
+        for abstract in abstracts:
+            if abstract in embedding_cache:
+                cached_embeddings.append(embedding_cache[abstract])
+                cache_hits += 1
+            else:
+                cached_embeddings.append(None)
+        
+        if cache_hits == len(abstracts):
+            embeddings = cached_embeddings
+            method_used = "cached"
+            print(f"Using cached embeddings for all {len(abstracts)} abstracts")
+        else:
+            embeddings = []
+            method_used = "local"
+        
+            if GEMINI_API_KEY:
+                try:
+                    method_used = "gemini"
+                    print(f"Using Gemini for {len(abstracts)} abstracts")
+                    client = genai.Client()
+                    
+                    retry_delay = 2
+                    max_retries = 3
+                    
+                    for attempt in range(max_retries):
+                        try:
+                            result = client.models.embed_content(
+                                model="gemini-embedding-001",
+                                contents=abstracts,
+                                config=types.EmbedContentConfig(
+                                    task_type="CLUSTERING",  # Using clustering task type
+                                    output_dimensionality=768
+                                )
+                            )
+                            
+                            embeddings = [embedding.values for embedding in result.embeddings]
+                            print(f"Successfully embedded {len(embeddings)} abstracts")
+                            break
+                            
+                        except Exception as e:
+                            if attempt < max_retries - 1:
+                                print(f"Retry in {retry_delay}s...")
+                                time.sleep(retry_delay)
+                                retry_delay *= 2
+                            else:
+                                print(f"Gemini failed after {max_retries} attempts: {e}")
+                                embeddings = []
+                                raise e
+                                
+                except Exception as e:
+                    print(f"Gemini error: {e}")
+                    method_used = "local"
+            
+            # Use local model as fallback
+            if not embeddings:
+                print("Using local SentenceTransformer")
+                embeddings = model.encode(abstracts).tolist()
+                method_used = "local"
+            
+            # Store new embeddings in cache
+            for abstract, embedding in zip(abstracts, embeddings):
+                embedding_cache[abstract] = embedding
+            print(f"Cached {len(embeddings)} new embeddings")
+        
+        # K-means clustering (same logic as visualize endpoint)
+        embeddings_array = np.array(embeddings)
+        
+        # Find optimal number of clusters
+        if len(all_papers_data) >= 4:
+            max_k = min(8, len(all_papers_data) // 2)
+            best_score = -1
+            n_clusters = 2
+            
+            for k in range(2, max_k + 1):
+                try:
+                    kmeans_temp = KMeans(n_clusters=k, random_state=42, n_init=10)
+                    labels = kmeans_temp.fit_predict(embeddings_array)
+                    score = silhouette_score(embeddings_array, labels)
+                    
+                    if score > best_score:
+                        best_score = score
+                        n_clusters = k
+                        
+                except Exception as e:
+                    print(f"Silhouette error for k={k}: {e}")
+                    continue
+            
+            print(f"Optimal k={n_clusters} (silhouette score: {best_score:.3f})")
+        else:
+            n_clusters = 2
+            print(f"Small dataset: using default k={n_clusters}")
+        
+        # Apply K-means clustering
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        cluster_labels = kmeans.fit_predict(embeddings_array)
+        
+        # Generate cluster names using TF-IDF (same function as visualize endpoint)
+        def generate_cluster_name_tfidf(cluster_id, paper_indices, all_titles):
+            cluster_titles = [all_papers_data[i]['title'] for i in paper_indices]
+            
+            if not cluster_titles or len(cluster_titles) == 0:
+                return f"Cluster {cluster_id + 1}"
+            
+            cluster_text = ' '.join(cluster_titles)
+            
+            tfidf = TfidfVectorizer(
+                max_features=100,
+                stop_words='english',
+                ngram_range=(1, 2),
+                min_df=1,
+                lowercase=True
+            )
+            
+            try:
+                tfidf.fit(all_titles)
+                cluster_tfidf = tfidf.transform([cluster_text])
+                
+                feature_names = tfidf.get_feature_names_out()
+                scores = cluster_tfidf.toarray()[0]
+                
+                top_indices = scores.argsort()[-3:][::-1]
+                top_terms = [feature_names[i] for i in top_indices if scores[i] > 0]
+                
+                if len(top_terms) >= 2:
+                    return f"{top_terms[0].title()} & {top_terms[1].title()}"
+                elif len(top_terms) == 1:
+                    return f"{top_terms[0].title()} Research"
+                else:
+                    return f"Topic {cluster_id + 1}"
+                    
+            except Exception as e:
+                print(f"TF-IDF naming error for cluster {cluster_id}: {e}")
+                return f"Cluster {cluster_id + 1}"
+        
+        # Group papers by cluster
+        cluster_groups = {}
+        for i, cluster_id in enumerate(cluster_labels):
+            if cluster_id not in cluster_groups:
+                cluster_groups[cluster_id] = []
+            cluster_groups[cluster_id].append(i)
+        
+        # Generate cluster names
+        all_titles = [paper_data['title'] for paper_data in all_papers_data]
+        cluster_names = {}
+        for cluster_id, paper_indices in cluster_groups.items():
+            cluster_names[cluster_id] = generate_cluster_name_tfidf(cluster_id, paper_indices, all_titles)
+        
+        # Apply PCA for dimensionality reduction
+        pca = PCA(n_components=2, random_state=42)
+        coordinates_2d = pca.fit_transform(embeddings_array)
+        
+        # Prepare visualization data
+        points = []
+        for i, paper_data in enumerate(all_papers_data):
+            # Give user input special cluster treatment
+
+            cluster_id = int(cluster_labels[i].item())
+            cluster_name = cluster_names[cluster_id]
+            if paper_data['is_user_input']:
+                cluster_id = -1
+                cluster_name = "User Input"
+            
+            point = {
+                "id": i,
+                "title": paper_data['title'],
+                "text": paper_data['title'][:15] + "..." if len(paper_data['title']) > 15 else paper_data['title'],
+                "full_text": paper_data['abstract'],
+                "x": float(coordinates_2d[i][0]),
+                "y": float(coordinates_2d[i][1]),
+                "cluster_id": cluster_id,
+                "cluster_name": cluster_name,
+                "is_user_input": paper_data['is_user_input']
+            }
+            
+            # Add paper_id if it's not user input
+            if not paper_data['is_user_input']:
+                point["paper_id"] = paper_data['paper_id']
+            
+            points.append(point)
+        
+        # Prepare cluster summary
+        clusters = []
+        for cluster_id, name in cluster_names.items():
+            cluster_points = [p for p in points if p["cluster_id"] == cluster_id]
+            clusters.append({
+                "id": int(cluster_id),
+                "name": name,
+                "size": len(cluster_points),
+                "color": ["blue", "red", "green", "orange", "purple"][int(cluster_id) % 5]
+            })
+        
+        # Add user input as special cluster
+        clusters.append({
+            "id": -1,
+            "name": "User Input",
+            "size": 1,
+            "color": "gray"
+        })
+        
+        return jsonify({
+            "points": points,
+            "count": len(points),
+            "method": method_used,
+            "pca_variance": float(sum(pca.explained_variance_ratio_)),
+            "clusters": clusters,
+            "n_clusters": n_clusters,
+            "collection_id": collection_id,
+            "bounds": {
+                "min_x": float(coordinates_2d[:, 0].min()),
+                "max_x": float(coordinates_2d[:, 0].max()),
+                "min_y": float(coordinates_2d[:, 1].min()),
+                "max_y": float(coordinates_2d[:, 1].max())
+            }
+        }), 200
+        
+    except Exception as e:
+        print(f"Error in analyze_idea: {e}")
+        return jsonify({"error": str(e)}), 500
+
 @bp.route('/test', methods=['GET'])
 def test_network():
     """Test endpoint to verify network routes are working"""
