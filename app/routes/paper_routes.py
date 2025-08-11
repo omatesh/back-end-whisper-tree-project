@@ -16,24 +16,27 @@ def get_paper_by_id(paper_id):
 
 @bp.put("/<int:paper_id>")
 def like_paper(paper_id):
-    """Increment the likes count for a paper"""
+    """Toggle the star status for a paper (starred/not starred)"""
     paper = Paper.query.get(paper_id)
     if not paper:
         abort(404, description=f"Paper with ID {paper_id} not found.")
     
     try:
-        paper.likes_count += 1
+        # Toggle between starred (1) and not starred (0)
+        is_currently_starred = paper.likes_count > 0
+        paper.likes_count = 0 if is_currently_starred else 1
         db.session.commit()
         
         return make_response(jsonify({
-            "message": "Paper liked successfully",
+            "message": "Paper starred" if paper.likes_count > 0 else "Paper unstarred",
+            "is_starred": paper.likes_count > 0,
             "paper": paper.to_dict()
         }), 200)
         
     except Exception as e:
         db.session.rollback()
-        print(f"Error liking paper: {e}")
-        abort(500, description="Failed to like paper.")
+        print(f"Error toggling paper star: {e}")
+        abort(500, description="Failed to toggle paper star.")
 
 @bp.delete("/<int:paper_id>")
 def delete_paper(paper_id):

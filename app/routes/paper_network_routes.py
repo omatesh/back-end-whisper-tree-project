@@ -65,7 +65,9 @@ def analyze_idea():
             db.func.length(Paper.abstract) > 50
         ).all()
         
-        if len(papers) < 2:
+        if len(papers) == 0:
+            return jsonify({"error": "This collection has no papers. Add some papers to perform analysis."}), 400
+        elif len(papers) < 2:
             return jsonify({"error": "Need at least 2 papers in collection for analysis"}), 400
         
         # creates a list with the user's idea as the first item
