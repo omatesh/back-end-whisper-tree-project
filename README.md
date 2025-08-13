@@ -96,7 +96,7 @@
 
  Backend Setup Steps
 
-  1. Clone the Backend Repository
+  1. Clone this Backend Repository
   cd whispertree-backend
 
   2. Create Virtual Environment:
@@ -110,14 +110,15 @@
   Create PostgreSQL database
   createdb whispertree_db
 
-  ##### Run migrations
+  Run migrations
   flask db upgrade
 
   5. Configure Environment Variables:
-  ##### Create .env file with:
+
+  Create .env file with:
   DATABASE_URL=postgresql://username:password@localhost/whispertree_db
   GEMINI_API_KEY=your_gemini_api_key
   CORE_API_KEY=your_core_api_key
 
-  6. Start Backend Server:
+  7. Start Backend Server:
   flask run
