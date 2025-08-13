@@ -7,7 +7,6 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score
-from sentence_transformers import SentenceTransformer
 from google import genai
 from google.genai import types
 import os
@@ -16,9 +15,6 @@ from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
-
-# Initialize the sentence transformer model for embeddings
-model = SentenceTransformer('all-MiniLM-L6-v2')
 
 # Gemini API
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
