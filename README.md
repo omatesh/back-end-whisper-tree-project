@@ -110,8 +110,8 @@
   Create PostgreSQL database
   createdb whispertree_db <br />
 
-  Run migrations <br />
-  flask db upgrade <br />
+      Run migrations <br />
+      flask db upgrade <br />
 
   5. Configure Environment Variables:
 
