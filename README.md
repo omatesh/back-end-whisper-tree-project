@@ -108,17 +108,17 @@
 
   4. Database Setup:
   Create PostgreSQL database
-  createdb whispertree_db
+  createdb whispertree_db <br />
 
-  Run migrations
-  flask db upgrade
+  Run migrations <br />
+  flask db upgrade <br />
 
   5. Configure Environment Variables:
 
-  Create .env file with:
-  DATABASE_URL=postgresql://username:password@localhost/whispertree_db
-  GEMINI_API_KEY=your_gemini_api_key
-  CORE_API_KEY=your_core_api_key
+  Create .env file with: <br />
+  DATABASE_URL=postgresql://username:password@localhost/whispertree_db <br />
+  GEMINI_API_KEY=your_gemini_api_key <br />
+  CORE_API_KEY=your_core_api_key <br />
 
   7. Start Backend Server:
   flask run
