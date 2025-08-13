@@ -105,16 +105,16 @@
 
   3. Install Dependencies:
   pip install -r requirements.txt
-  
+
   4. Database Setup:
-  # Create PostgreSQL database
+  Create PostgreSQL database
   createdb whispertree_db
 
-  # Run migrations
+  ##### Run migrations
   flask db upgrade
 
   5. Configure Environment Variables:
-  # Create .env file with:
+  ##### Create .env file with:
   DATABASE_URL=postgresql://username:password@localhost/whispertree_db
   GEMINI_API_KEY=your_gemini_api_key
   CORE_API_KEY=your_core_api_key
